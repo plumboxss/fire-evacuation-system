@@ -1,0 +1,36 @@
+# Data pipeline configuration
+
+dataset:
+  n_scenarios: 30         # Total FDS scenarios
+  train_split: 24         # Scenarios used for training
+  val_split: 3            # Scenarios used for validation
+  ood_split: 3            # Out-of-distribution scenarios (held out entirely)
+  random_seed: 42         # Seed for train/val/OOD assignment
+
+  raw_dir: "data/raw"         # Raw FDS output files (*.fds, *.smv, slices)
+  processed_dir: "data/processed"  # Normalised HDF5 tensors
+
+# Temporal sampling
+time:
+  n_frames: 31            # Frames: t = 0, 10, 20, ..., 300 s
+  dt_seconds: 10.0        # Interval between frames
+  t_end_seconds: 300.0    # Final frame time
+
+# Input channels fed into the model (order is fixed — see CLAUDE.md)
+input_channels:
+  - temperature           # °C → normalised T
+  - visibility            # m  → inverse-normalised V
+  - co_ppm                # ppm → log-normalised CO
+  - mask                  # 1 = fluid cell, 0 = solid (wall/obstacle)
+  - time_encoding         # Scalar t/T_end broadcast to grid
+
+# Output channels produced by the model
+output_channels:
+  - temperature
+  - visibility
+  - co_ppm
+
+preprocessing:
+  shuffle: true           # Shuffle scenario order before split
+  normalize: true         # Apply normalization from src/shared/normalization.py
+  cache_in_memory: false  # Too large for 30 full scenarios; stream from disk

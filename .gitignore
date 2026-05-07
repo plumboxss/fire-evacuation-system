@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# PyTorch / model checkpoints
+checkpoints/*.pt
+checkpoints/*.pth
+checkpoints/*.ckpt
+*.safetensors
+
+# Data files (large binaries)
+data/raw/*.fds
+data/raw/*.smv
+data/raw/*.sf
+data/raw/*.bf
+data/raw/*.q
+data/raw/*.s3d
+data/processed/*.h5
+data/processed/*.hdf5
+data/processed/*.npy
+data/processed/*.npz
+*.h5
+*.hdf5
+
+# Results / figures (regeneratable)
+results/
+figures/*.png
+figures/*.pdf
+figures/*.svg
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/*.ipynb
+
+# Weights & Biases
+wandb/
+
+# IDE
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.pem

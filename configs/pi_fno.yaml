@@ -1,0 +1,41 @@
+# Physics-Informed FNO (PI-FNO) model configuration
+
+model:
+  name: "PI_FNO"
+  in_channels: 5           # Input channels [T, V, CO, mask, time_enc]
+  out_channels: 3          # Output channels [T, V, CO]
+  modes: [8, 8, 4]         # Fourier truncation modes per spatial dim (x, y, z)
+  width: 32                # Channel width inside FNO layers
+  n_layers: 4              # Number of FNO Fourier integral operator blocks
+  padding: 0               # Optional zero-padding before FFT
+  activation: "gelu"       # Nonlinearity: gelu or relu
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  batch_size: 4
+  max_epochs: 150
+  grad_clip: 1.0
+
+  scheduler: "cosine"
+  warmup_epochs: 10
+  eta_min: 1.0e-6
+
+  # Physics-informed loss weights
+  # Reduce pde_* weights if training diverges; increase to improve physics.
+  loss_weights:
+    data: 1.0              # Supervised MSE against FDS ground truth
+    pde_heat: 0.1          # Heat diffusion residual (energy conservation)
+    pde_species: 0.05      # Species transport residual (CO / visibility)
+    boundary: 0.01         # Boundary condition enforcement (walls = 0 flux)
+
+wandb:
+  project: "fire-evacuation"
+  group: "pi_fno"
+  tags: ["pi_fno", "physics_informed"]
+
+checkpoints:
+  save_top_k: 3
+  monitor: "val/loss"
+  mode: "min"
+  dirpath: "checkpoints/pi_fno"

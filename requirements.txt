@@ -1,0 +1,38 @@
+# Core deep learning
+torch==2.0.1
+torchvision==0.15.2
+
+# Neural operator (FNO)
+neuraloperator==0.2.0
+
+# FDS data extraction
+fdsreader==1.8.2
+
+# Numerical / scientific
+numpy==1.24.3
+scipy==1.11.4
+
+# Graph algorithms
+networkx==3.2.1
+
+# Config / data handling
+pyyaml==6.0.1
+pydantic==2.5.3
+h5py==3.10.0
+pandas==2.1.4
+
+# Experiment tracking
+wandb==0.16.2
+
+# Visualisation
+matplotlib==3.8.2
+
+# Simulation (Week 12 only)
+pybullet==3.2.6
+
+# Utilities
+tqdm==4.66.1
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0

@@ -1,0 +1,39 @@
+# ConvLSTM 3D model configuration
+
+model:
+  name: "ConvLSTM3D"
+  in_channels: 5          # Input channels [T, V, CO, mask, time_enc]
+  out_channels: 3         # Output channels [T, V, CO]
+  hidden_dim: 32          # Hidden state channels per ConvLSTM layer
+  kernel_size: [3, 3, 3]  # 3-D convolution kernel (x, y, z)
+  num_layers: 2           # Number of stacked ConvLSTM layers
+  dropout: 0.1            # Dropout probability applied between layers
+  batch_norm: true        # Apply batch normalisation after each layer
+  bias: true              # Include bias in convolutions
+
+training:
+  lr: 1.0e-3              # Initial learning rate (Adam)
+  weight_decay: 1.0e-5    # L2 regularisation
+  batch_size: 4           # A100 40 GB with (B, 5, 60, 40, 6) tensors
+  max_epochs: 100
+  grad_clip: 1.0          # Gradient clipping norm
+
+  scheduler: "cosine"     # LR schedule: cosine annealing
+  warmup_epochs: 5        # Linear warmup before cosine decay
+  eta_min: 1.0e-6         # Minimum LR at end of cosine schedule
+
+  # Loss weights — pure data loss for ConvLSTM baseline
+  loss_weights:
+    mse: 1.0
+    physics: 0.0          # No physics loss for ConvLSTM
+
+wandb:
+  project: "fire-evacuation"
+  group: "conv_lstm_baseline"
+  tags: ["conv_lstm", "baseline"]
+
+checkpoints:
+  save_top_k: 3           # Keep best 3 checkpoints by val loss
+  monitor: "val/loss"
+  mode: "min"
+  dirpath: "checkpoints/conv_lstm"

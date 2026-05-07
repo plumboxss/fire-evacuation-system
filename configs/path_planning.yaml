@@ -1,0 +1,28 @@
+# Path planning configuration
+
+graph:
+  connectivity: 6           # 6-connected grid (±x, ±y, ±z faces only)
+  include_z: true           # Allow movement through z-axis (vertical layers)
+
+astar:
+  heuristic: "euclidean"    # Distance heuristic: euclidean or manhattan
+  tie_breaking: true        # Break ties with small perturbation for fewer expansions
+
+# Edge weight formula:
+#   w(u→v) = base_cost + risk_scale * risk(v)
+# If risk(v) > risk_threshold, edge is removed from graph.
+edge_weights:
+  base_cost: 1.0            # Cost per unit grid step (= 0.5 m)
+  risk_scale: 10.0          # Danger contribution to step cost
+  risk_threshold: 0.9       # Above this risk level: cell is impassable
+
+# Occupant model (used for FED accumulation along path)
+occupant:
+  breathing_rate_lpm: 25.0  # Litres per minute (moderate walking activity)
+  sensitive_population: true  # Use FED threshold 0.3 (ISO 13571 sensitive)
+
+# Dynamic re-planning
+replanning:
+  interval_seconds: 10.0    # Re-plan at each new FDS frame (10 s cadence)
+  max_path_length: 500      # Give up if no path shorter than this found
+  fallback_to_static: true  # If no path found, return last valid path

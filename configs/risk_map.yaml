@@ -1,0 +1,36 @@
+# Risk map configuration
+# Thresholds from ISO 13571:2012 and SFPE Handbook of Fire Protection Engineering.
+
+tenability:
+  temperature:
+    safe_celsius: 30.0    # Below: negligible thermal hazard
+    danger_celsius: 60.0  # Above: critical for humid-air exposure (ISO 13571)
+
+  visibility:
+    safe_meters: 10.0     # Above: occupants can locate exits unaided
+    danger_meters: 3.0    # Below: wayfinding severely impaired
+
+  co:
+    safe_ppm: 100.0       # Below: no significant physiological effect
+    danger_ppm: 1400.0    # Above: incapacitation risk (SFPE Table 2-6.3)
+
+  fed:
+    threshold: 0.3        # FED = 0.3 → incapacitation for sensitive population
+                          # (ISO 13571:2012, Sec. 7.3)
+
+# Aggregation weights for combined danger score
+# Must sum to 1.0
+aggregation:
+  temperature_weight: 0.4
+  visibility_weight: 0.4
+  co_weight: 0.2
+
+# FED (Fractional Effective Dose) parameters for CO
+# Based on Purser's CO dose-response model (SFPE Handbook, 3rd ed.)
+fed:
+  co_exponent: 1.036      # Dose-response curve exponent for CO
+  rme_ppm: 33200.0        # Reference: RD50 × 3 for CO incapacitation
+
+# Out-of-bounds behaviour: any query outside the building domain
+# returns danger = 1.0 (maximum) — safety default.
+out_of_bounds_danger: 1.0
