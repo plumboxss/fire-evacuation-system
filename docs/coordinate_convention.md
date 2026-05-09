@@ -2,6 +2,29 @@
 
 > **Single source of truth** for all spatial coordinates used in the project.
 > Consult this document before writing any geometry or tensor indexing code.
+>
+> See `CLAUDE.md` for project context, `interface_contracts.md` for module APIs.
+
+---
+
+## Three "Heights" — DO NOT CONFUSE
+
+This project has **three different "heights"** that must not be mixed up.
+
+| Concept | Z range | Used in | Owner |
+|---------|---------|---------|-------|
+| **Real STL building** | 0 ~ 3.2 m | PyroSim STL geometry | Member A |
+| **FDS MESH (computational)** | 0 ~ 4 m | FDS internal simulation | Member A |
+| **SLCF (model-visible)** | **0 ~ 3 m** | ConvLSTM, PI-FNO, all models | Member B, C |
+
+The grid models see is **only 0–3 m** (6 cells × 0.5 m). This:
+- Preserves the physical building shape (3.2 m)
+- Avoids fdsreader broadcast errors (must align with `(60, 40, 6)`)
+- Captures the breathing-zone analysis (1.5 m) and the immediately
+  above region (up to 3 m). The hottest smoke layer at 3.0–3.2 m is
+  sacrificed, but is not critical for occupant safety.
+
+See decision D-015.
 
 ---
 
@@ -19,7 +42,8 @@ boundary conditions.
 | Cells | **100 × 80 × 8** |
 | Extent | **[−10, 40] × [−10, 30] × [0, 4] m** |
 | Resolution | 0.5 m × 0.5 m × 0.5 m |
-| Buffer | 10 m on −X, +X, −Y, +Y |
+| Buffer | 10 m on −X, +X, −Y, +Y (for boundary conditions) |
+| Z buffer | 1 m above building (for ceiling jet handling) |
 
 We do **not** train on this grid. It exists so FDS has clean boundaries.
 
@@ -32,7 +56,7 @@ What `&SLCF` extracts. This is the actual learnable region.
 | Cells | **60 × 40 × 6** |
 | Extent | **[0, 30] × [0, 20] × [0, 3] m** |
 | Resolution | 0.5 m × 0.5 m × 0.5 m (cell-centered) |
-| Cell shape | `(nx, ny, nz)` |
+| Cell shape | `(nx, ny, nz)` = (60, 40, 6) |
 
 **Models always operate on the SLCF region, never the MESH.**
 
@@ -67,7 +91,7 @@ y_centre = iy × 0.5 + 0.25     for iy in [0, 40)   → [0.25, 0.75, ..., 19.75]
 z_centre = iz × 0.5 + 0.25     for iz in [0,  6)   → [0.25, 0.75, ...,  2.75]
 ```
 
-World-to-grid conversion:
+World-to-grid conversion (for nearest-cell lookup):
 
 ```python
 ix = int((world_x - 0.25) / 0.5)   # cell that "owns" this point
@@ -130,12 +154,17 @@ grid, coords = temp_slc.to_global(return_coordinates=True)
 
 ### Pre-conditions for this pattern to work
 
-1. SLCF `XB` matches the learnable region: `0,30, 0,20, 0,3`
-2. `CELL_CENTERED=.TRUE.` is set on the SLCF
-3. `VECTOR=.TRUE.` is **NOT** set (causes fdsreader broadcast bug)
+These must all be true. If any fails, `to_global()` will raise an error
+or produce garbage:
 
-If any of these fail, `to_global()` will raise an error or produce
-garbage. See `docs/lessons_learned.md` for the actual bug encountered.
+1. **SLCF `XB` matches the learnable region**: `0,30, 0,20, 0,3`
+2. **`CELL_CENTERED=.TRUE.`** is set on the SLCF
+3. **`VECTOR=.TRUE.`** is **NOT** set (causes fdsreader broadcast bug)
+4. SLCF Z range is exactly `0.0, 3.0` (not 3.2 or 3.5)
+
+If `to_global()` raises broadcast error like
+`"shape (61,41,9) into shape (61,41,8)"`,
+go check the SLCF Z range in the .fds file. See L-009.
 
 ### Time axis handling
 
@@ -181,6 +210,23 @@ positions, the coordinate alignment is broken. Debug in this order:
 
 ---
 
+## STL File Requirements
+
+The PyroSim STL must satisfy:
+
+1. **Units**: metres (PyroSim "Length unit" = Meter, not Millimeter)
+2. **Origin**: (0, 0, 0) at one corner of the building, on the floor
+3. **Z range**: building can extend up to 3.2 m (preserved as-is)
+4. **X range**: building should fit within 0–30 m
+5. **Y range**: building should fit within 0–20 m
+6. **No flipped normals**: outside walls' normals point outward
+
+If your STL fails any of these, fix it in PyroSim (Translate, Scale)
+**before** running the FDS simulation. See L-010 for STL conversion
+helpers.
+
+---
+
 ## Common Mistakes — Hall of Shame
 
 | Mistake | Correct approach |
@@ -192,8 +238,10 @@ positions, the coordinate alignment is broken. Debug in this order:
 | `os.path.join` for paths | `pathlib.Path` |
 | `cell_corner = ix * 0.5` | `cell_centre = ix * 0.5 + 0.25` |
 | Using MESH grid (100×80×8) | Use SLCF region (60×40×6) |
-| `VECTOR=.TRUE.` on SLCF | Omit; causes fdsreader bug |
+| `VECTOR=.TRUE.` on SLCF | Omit; causes fdsreader bug (L-001) |
+| SLCF Z range `0,3.5` | Must be `0,3` exactly (L-009) |
 | Transposing FDS output axes | Already in (T, X, Y, Z) order |
+| STL in mm | Convert to metres before PyroSim import (L-010) |
 
 ---
 
@@ -220,3 +268,32 @@ from src.shared.constants import (
 
 If you need values not in the list above, propose adding them to
 `constants.py` rather than inlining them.
+
+---
+
+## 5-Step Verification Checklist (When Things Break)
+
+When coordinates don't align (drone in wrong place, fire shows in wrong cell, etc.):
+
+1. **Print actual fdsreader coords**:
+   ```python
+   _, coords = slc.to_global(return_coordinates=True)
+   print(coords['x'][:5], coords['y'][:5], coords['z'][:5])
+   # Expected: [0.25 0.75 1.25 1.75 2.25] [0.25 0.75 ...] [0.25 0.75 ...]
+   ```
+
+2. **Check SLCF Z range in .fds file**:
+   ```bash
+   grep "QUANTITY='TEMPERATURE'" path/to/scenario.fds
+   # Expected ending: XB=0.0,30.0,0.0,20.0,0.0,3.0/
+   ```
+
+3. **Verify building mask alignment**: Visualize the mask z=1.5 m slice
+   and confirm walls are where you expect.
+
+4. **Verify model output spatial alignment**: For a known fire location
+   (say at X=5, Y=10), the model output should show heat emanating from
+   roughly grid index `(10, 20, 3)` (since `int((5 - 0.25)/0.5) = 9.5 ≈ 10`).
+
+5. **Drone position sanity**: Print `pybullet.getBasePositionAndOrientation(drone_id)[0]`
+   and confirm values are reasonable metres (not 1000s = mm, not negative).

@@ -3,19 +3,24 @@
 > Reference document for tenability analysis.
 > All thresholds are drawn from **ISO 13571:2012** and the
 > **SFPE Handbook of Fire Protection Engineering** (5th ed.).
+>
+> See `CLAUDE.md` for project context, `interface_contracts.md` for module APIs.
 
 ---
 
 ## Korean Glossary (한국어 용어 정리)
 
-| English | 한국어 |
-|---------|-------|
-| Tenability | 거주가능성 / 인명안전조건 |
-| Fractional Effective Dose (FED) | 누적유효노출량 |
-| Available Safe Egress Time (ASET) | 가용피난시간 |
-| Required Safe Egress Time (RSET) | 요구피난시간 |
-| Wayfinding | 피난동선 인식 / 길 찾기 |
-| Incapacitation | 행동불능 |
+| English | 한국어 | 설명 |
+|---------|-------|------|
+| Tenability | 거주가능성 / 인명안전조건 | 사람이 노출되어도 안전한 환경 |
+| Fractional Effective Dose (FED) | 누적유효노출량 | 시간에 걸친 독성 누적량, ISO 13571 핵심 지표 |
+| Available Safe Egress Time (ASET) | 가용피난시간 | 위험해질 때까지 남은 시간 |
+| Required Safe Egress Time (RSET) | 요구피난시간 | 출구까지 도달하는 데 걸리는 시간 |
+| Wayfinding | 피난동선 인식 / 길 찾기 | 가시거리가 결정 |
+| Incapacitation | 행동불능 | FED = 1.0 시점에서 50% 의식상실 |
+| Smoke layer | 연기층 | 천장 부근 가장 뜨거운 층 |
+| Heat flux | 열복사량 | 본 프로젝트에서는 다루지 않음 |
+| Hyperventilation | 과호흡 | 본 프로젝트에서는 다루지 않음 |
 
 ---
 
@@ -55,7 +60,7 @@ Danger score (used by risk map):
 d_T = clip((T − 30) / (60 − 30), 0, 1)
 ```
 
-This is a linear ramp: 30 °C → 0.0; 60 °C → 1.0.
+This is a linear ramp: 30 °C → 0.0; 60 °C → 1.0; saturates beyond.
 
 ### Visibility
 
@@ -146,6 +151,7 @@ because:
    already saturate via clipping.
 2. The simplified form preserves the linear-time-integral structure
    that lets us compute FED along a path with low overhead.
+3. Documented as decision D-008 with rationale.
 
 ### Threshold for this project
 
@@ -168,6 +174,38 @@ FED_path = (Δt_min / 27000) · Σ_t CO_ppm(x(t), t)
 
 This is the metric used by EXP-PATH-001 to compare static vs dynamic
 evacuation paths.
+
+---
+
+## ASET (Available Safe Egress Time)
+
+For each cell `(x, y, z)` in the SLCF region:
+
+```
+ASET(x, y, z) = first time t* such that d_total(t*, x, y, z) > danger_threshold
+              = T_max  if cell never becomes dangerous
+```
+
+where `danger_threshold` is typically 0.5 (configurable in `risk_map.yaml`).
+
+ASET maps are computed once per scenario and used to:
+- Identify the spatial extent of safe regions over time
+- Compare across model predictions (EXP-RISK-001)
+- Provide bound on path planning horizon
+
+```python
+def compute_aset_map(risk_grid_time: np.ndarray,
+                     danger_threshold: float = 0.5) -> np.ndarray:
+    """Returns (60, 40, 6) ASET map in seconds."""
+    T = risk_grid_time.shape[0]  # 31
+    aset = np.full(risk_grid_time.shape[1:], 300.0)  # default = T_END
+    for t_idx in range(T):
+        t_seconds = t_idx * 10.0
+        cells_dangerous = risk_grid_time[t_idx] > danger_threshold
+        new_dangers = cells_dangerous & (aset == 300.0)
+        aset[new_dangers] = t_seconds
+    return aset
+```
 
 ---
 
@@ -196,10 +234,18 @@ per cell.
 
 ## Implementation Reference
 
+Core functions (Week 10):
+
 ```python
 from src.shared.constants import TENABILITY
-from src.risk_map.tenability import compute_danger_score   # Wk 10
-from src.risk_map.fed import accumulate_fed                # Wk 10
+from src.risk_map.tenability import (
+    compute_danger_temperature,
+    compute_danger_visibility,
+    compute_danger_co,
+    compute_total_danger,
+)
+from src.risk_map.fed import accumulate_fed_co
+from src.risk_map.aset import compute_aset_map
 ```
 
 The `TENABILITY` dataclass exports:
@@ -216,7 +262,22 @@ TENABILITY.FED_THRESHOLD   = 0.3       # sensitive population
 TENABILITY.WEIGHT_T        = 0.4
 TENABILITY.WEIGHT_V        = 0.4
 TENABILITY.WEIGHT_CO       = 0.2
+TENABILITY.AGGREGATE_THRESHOLD = 0.5    # for ASET map
 ```
+
+---
+
+## Visualisation Defaults
+
+For consistency in plots (Week 13):
+
+| Quantity | Colormap | Range |
+|----------|----------|-------|
+| Temperature (raw) | `inferno` | 20 to 600 °C |
+| Visibility (raw) | `viridis_r` | 0 to 30 m |
+| CO (raw) | `magma` | 0 to 5000 ppm |
+| Danger score | `RdYlGn_r` | 0.0 to 1.0 |
+| ASET (seconds) | `viridis` | 0 to 300 s |
 
 ---
 
@@ -249,3 +310,46 @@ per Purser's review work.
    threshold confirmation).
 4. **Purser, D. A.** "Toxicity assessment of combustion products."
    SFPE Handbook (3rd ed.), Ch. 2-6, 2002.
+5. **RWTH Aachen Fire Simulation Lecture Notes** —
+   https://firedynamics.github.io/LectureFireSimulation/ — worked
+   examples of ASET/RSET in FDS contexts.
+
+---
+
+## Worked Example
+
+For a single FDS scenario:
+
+```python
+from src.data_pipeline.fds_extractor import extract_slices
+from src.risk_map.tenability import compute_total_danger
+from src.risk_map.aset import compute_aset_map
+
+# 1. Extract raw fields from FDS output
+slices = extract_slices(Path("data/raw/scenario_000"))
+T = slices['temperature']    # (31, 60, 40, 6) °C
+V = slices['visibility']     # (31, 60, 40, 6) m
+CO = slices['co_ppm']        # (31, 60, 40, 6) ppm
+
+# 2. Compute danger fields
+d_T = (T - 30) / 30
+d_T = np.clip(d_T, 0, 1)
+
+d_V = (10 - V) / 7
+d_V = np.clip(d_V, 0, 1)
+
+d_CO = (CO - 100) / 1300
+d_CO = np.clip(d_CO, 0, 1)
+
+# 3. Aggregate
+risk = 0.4 * d_T + 0.4 * d_V + 0.2 * d_CO   # (31, 60, 40, 6)
+
+# 4. ASET map
+aset = compute_aset_map(risk, danger_threshold=0.5)  # (60, 40, 6)
+
+# 5. Path-integrated FED for a hypothetical occupant
+from src.risk_map.fed import accumulate_fed_co
+co_at_path = ...  # CO values along the occupant's actual path
+fed_seq = accumulate_fed_co(co_at_path, dt_seconds=1.0)
+print(f"Final FED: {fed_seq[-1]:.3f} (threshold 0.3)")
+```

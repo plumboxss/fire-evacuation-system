@@ -1,13 +1,15 @@
 # Decision Log
 
 > Each major project decision logged with date, decision, alternatives,
-> and rationale. Append-only — past decisions are not edited.
+> and rationale. **Append-only** — past decisions are not edited.
+>
+> When adding: assign next D-NNN number, fill the four fields, commit.
 
 ---
 
 ## D-001: Single floor, not multi-floor
 
-**Date**: Project inception
+**Date**: Project inception (Week 0)
 **Decision**: Building is a single floor only.
 **Alternatives**: Multi-floor with stairwells; high-rise.
 **Rationale**: Multi-floor doubles or triples computational cost in FDS,
@@ -19,7 +21,7 @@ path-planning value proposition.
 
 ## D-002: Mesh resolution 0.5 m
 
-**Date**: Project inception
+**Date**: Week 0
 **Decision**: Cell size 0.5 m × 0.5 m × 0.5 m → 60 × 40 × 6 SLCF grid.
 **Alternatives**: 0.2 m (150 × 100 × 15 cells) for higher fidelity.
 **Rationale**: 0.2 m would make FDS scenarios take 8–10× longer to run
@@ -33,12 +35,13 @@ features at human-evacuation scale (room widths, corridor widths).
 
 **Date**: Week 3
 **Decision**: Maze-style layout with multiple rooms, intersections,
-central courtyard, and 2 end-exit doors.
+central courtyard, and 3 exits (NE end, SW end, mid-side).
 **Alternatives**: Single corridor with fire at one end.
 **Rationale**: A simple rectangle makes Dijkstra near-optimal — defeats
 the purpose of comparing dynamic vs static planners. Maze structure
 ensures Dijkstra and dynamic planners produce visibly different
-paths under fire spread.
+paths under fire spread. 3 exits provide path diversity (asymmetric
+distance from any fire location).
 
 ---
 
@@ -125,7 +128,7 @@ sensitive populations. NFPA 130 (transit) also uses 0.3.
 **Rationale**: `VECTOR=.TRUE.` + `CELL_CENTERED=.TRUE.` causes
 `fdsreader` to fail with array broadcast errors on slice loading.
 This was discovered the hard way during initial data validation.
-Logged separately in `lessons_learned.md`.
+Logged separately in `lessons_learned.md` as L-001.
 
 ---
 
@@ -134,7 +137,7 @@ Logged separately in `lessons_learned.md`.
 **Date**: Project inception
 **Decision**: 24 train / 3 val / 3 OOD = 30 total.
 **Alternatives**: 100+ scenarios for stronger generalisation guarantees.
-**Rationale**: At ~1 CPU-hour per scenario × 30 = 30 CPU-hours.
+**Rationale**: At ~25 minutes per scenario × 30 = 12.5 hours total.
 RunPod budget supports this comfortably. 100+ would consume budget
 without proportional benefit at student-team timeline. Standard
 practice in surrogate ML for CFD literature.
@@ -167,7 +170,7 @@ risk map for evacuation guidance.
 ## D-014: Replan period 30 s for dynamic planner
 
 **Date**: Week 11 (proposed)
-**Decision**: `DynamicPredictivePlanner` re-plans every 30 s.
+**Decision**: `DynamicPredictivePlanner` re-plans every 30 s with 60 s lookahead.
 **Alternatives**: Replan every step; replan never.
 **Rationale**: Replan-every-step is computationally wasteful (PI-FNO
 inference at 10 Hz adds up) and doesn't change the path much.
@@ -176,12 +179,80 @@ with 60 s prediction horizon (replan halfway through horizon).
 
 ---
 
-## How to add a decision
+## D-015: STL building height 3.2 m preserved, SLCF Z = 0–3 m only
+
+**Date**: Week 5 (after STL inspection)
+**Decision**: Real STL building can be up to 3.2 m tall; SLCF extraction
+window is Z = 0 to 3 m only (6 cells × 0.5 m).
+**Alternatives**:
+- (A) Rescale STL to 3.0 m height → loses architectural realism
+- (B) SLCF Z = 0 to 3.5 m (7 cells) → fdsreader broadcast error
+- (C) SLCF Z = 0 to 4 m (8 cells, matches MESH) → larger grid (60, 40, 8),
+  changes all interface contracts, breaks (60, 40, 6) convention
+- (D) **Selected**: STL 3.2 m physical, SLCF 3.0 m model-visible
+
+**Rationale**: Decision D minimizes interface changes (everything
+stays at `(60, 40, 6)`) while preserving physical realism of the building.
+The 3.0–3.2 m sliver is the hottest smoke layer but does not affect
+breathing-zone (1.5 m) safety analysis. Documented in
+`coordinate_convention.md` and `lessons_learned.md` (L-009).
+
+---
+
+## D-016: Three exits in maze layout, asymmetric placement
+
+**Date**: Week 3 (refining D-003)
+**Decision**: 3 exits, placed at NE end, SW end, and one mid-side.
+**Alternatives**: 2 exits (one each end), 4 exits (more symmetric).
+**Rationale**: 3 exits provide enough path diversity that fire location
+strongly affects optimal exit choice (good for EXP-PATH-001). 4 exits
+would make most fire scenarios trivially solvable. Asymmetric placement
+ensures the fire-aware planner has different optimal paths from
+different starting positions, demonstrating its value.
+
+---
+
+## D-017: Walking speed 1.5 m/s for evacuation simulation
+
+**Date**: Week 11 (proposed)
+**Decision**: `EvacuationSimulator.walking_speed_mps = 1.5`.
+**Alternatives**: 1.0 (slow), 2.0 (running).
+**Rationale**: 1.5 m/s is the SFPE Handbook standard for unimpeded
+adult walking speed in fire egress. Reducing to 1.0 m/s would model
+panic conditions; 2.0 m/s is over-fast for crowded conditions.
+
+---
+
+## D-018: PI loss 4-stage curriculum
+
+**Date**: Week 8 (proposed)
+**Decision**: PI loss components introduced in 4 stages over 100 epochs:
+- Stage 1 (epochs 0–25): MSE only
+- Stage 2 (25–50): + mass conservation (CO)
+- Stage 3 (50–75): + heat diffusion residual
+- Stage 4 (75–100): + tenability boundary
+
+**Alternatives**: All-on from start; or simpler 2-stage curriculum.
+
+**Rationale**: PI-FNO training is unstable when all loss terms are
+on simultaneously, especially with random initialization. The data
+loss must dominate early to bootstrap learning. Curriculum learning
+is standard practice in physics-informed deep learning literature.
+The progression mass → heat → boundary roughly orders these terms by
+stability (mass conservation is most reliable; heat residual depends
+on quality of T predictions; tenability is most "downstream").
+
+---
+
+## How to Add a Decision
 
 When making a major scope or interface decision:
 
-1. Write a new section here labeled `D-NNN`.
+1. Write a new section labeled `D-NNN`.
 2. Date, Decision (one line), Alternatives, Rationale.
 3. Keep concise — 3–5 sentences for rationale.
 4. Update `CLAUDE.md` constraints if the decision changes them.
 5. Commit with message `decisions: D-NNN - <one-line summary>`.
+
+Do not edit past decisions; if a decision is reversed, write a new
+entry explaining the reversal.

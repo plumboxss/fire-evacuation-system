@@ -1,17 +1,19 @@
 # Fire Evacuation Prediction System — Project Context
 
-> **Read this file first.** It is the single source of truth for project constraints,
-> conventions, and scope. Never violate the hard constraints below.
+> **Read this file first.** It is the single source of truth for project
+> constraints, conventions, scope, and team workflow. Never violate the
+> hard constraints below.
 >
 > When you need detail, refer to:
 > - `docs/interface_contracts.md` — exact function signatures
 > - `docs/coordinate_convention.md` — coordinate system rules
 > - `docs/risk_indicators.md` — tenability thresholds + ISO/SFPE citations
 > - `docs/manual_v2.md` — 14-week schedule and rationale
-> - `docs/decisions.md` — log of past decisions and their reasons
-> - `docs/lessons_learned.md` — mistakes already made; do not repeat
-
-Read these explicitly when relevant. Do **not** auto-load them every session.
+> - `docs/decisions.md` — log of past decisions and reasons
+> - `docs/lessons_learned.md` — concrete bugs encountered, do not repeat
+> - `docs/task_request_template.md` — standard format for task delegation
+>
+> Read these explicitly when relevant. Do **not** auto-load them every session.
 
 ---
 
@@ -20,15 +22,47 @@ Read these explicitly when relevant. Do **not** auto-load them every session.
 14-week undergraduate engineering capstone competition entry: an
 **active fire-response system**.
 
-- **ConvLSTM** and **PI-FNO** models trained on FDS simulation data predict fire spread.
-- Predictions are converted to **ISO-13571-based risk maps** (FED + tenability).
-- **Weighted A\*** computes dynamic evacuation paths.
-- **PyBullet** is used in Week 12 for an integrated single-drone demo.
+End-to-end pipeline:
 
-Three primary research goals:
-1. **Speed**: PI-FNO inference 1000× faster than FDS
-2. **Generalization**: PI-FNO performs on unseen fire locations / HRR
-3. **Path safety**: Dynamic paths reduce cumulative FED vs static paths
+```
+FDS simulation data
+    ↓
+ConvLSTM and PI-FNO models predict fire spread
+(Temperature, Visibility, CO over time)
+    ↓
+ISO-13571-based risk map conversion
+(Tenability thresholds + cumulative FED)
+    ↓
+Weighted A* on building graph
+(Static baseline vs Dynamic predictive)
+    ↓
+Path safety validation
+(EXP-PATH-001: cumulative FED reduction)
+    ↓
+PyBullet integrated demo (Week 12)
+(Single Crazyflie drone follows planned path)
+```
+
+---
+
+## Six Core Hypotheses (Drives All Work)
+
+Every line of code in this project exists to validate one of these hypotheses.
+
+| ID | Hypothesis | Target |
+|----|-----------|--------|
+| H1 | **Speed**: PI-FNO inference is ≥1000× faster than FDS | <50ms vs FDS minutes |
+| H2 | **Accuracy**: Relative L2 ≤ 15% on training scenarios | EXP-FIRE-001 |
+| H3 | **Generalization**: PI-FNO outperforms ConvLSTM on OOD scenarios | EXP-FIRE-001 OOD |
+| H4 | **Practicality**: Risk map FNR <10% (false negative rate) | EXP-RISK-001 |
+| H5 | **Risk map fidelity**: PI-FNO risk map IoU ≥0.7 vs FDS ground truth | EXP-RISK-001 |
+| H6 | **Path safety**: Dynamic A* reduces cumulative FED ≥30% vs static | EXP-PATH-001 |
+
+**Presentation emphasis order**: H1 → H6 → H4 → H2 → H5 → H3.
+
+H6 is the strongest card: static-vs-dynamic FED comparison is intuitive,
+visually striking, and immediately resonates with fire safety engineering
+judges.
 
 ---
 
@@ -39,14 +73,20 @@ Three primary research goals:
 | Parameter | Value |
 |-----------|-------|
 | Building | Single floor, complex maze layout (multiple rooms, intersections, central courtyard) |
+| **Real STL building** | Up to 3.2 m height (preserved as-is in PyroSim) |
 | **FDS MESH** (computational domain) | **100 × 80 × 8 cells** over **[−10, 40] × [−10, 30] × [0, 4] m** |
 | **SLCF region** (learnable, model-visible) | **60 × 40 × 6 cells** over **[0, 30] × [0, 20] × [0, 3] m** |
 | Cell resolution | **0.5 m × 0.5 m × 0.5 m** |
 | External buffer | 10 m on −X, +X, −Y, +Y for ventilation boundaries |
 
-**Critical distinction:** The MESH is what FDS simulates (with buffer). The SLCF
-is what models ingest. The buffer exists purely for boundary conditions and is
-discarded during data extraction.
+**Critical distinction:** The MESH is what FDS simulates (with 10 m buffer).
+The SLCF is what models ingest. The buffer exists purely for boundary
+conditions and is invisible to ML.
+
+**Real STL height 3.2 m, but SLCF extracts only 0~3 m.** This preserves
+the physical building shape while keeping the learnable grid at 6 z-cells
+(matching `GRID_SHAPE`). Top 0.2 m is the hottest smoke layer but does not
+affect breathing-zone analysis (1.5 m). See decision D-015.
 
 ### Time
 
@@ -62,11 +102,11 @@ discarded during data extraction.
 
 | Parameter | Value |
 |-----------|-------|
-| Total scenarios | **30** |
-| Train / Val / OOD split | 24 / 3 / 3 |
+| Total scenarios | **30** (24 train / 3 val / 3 OOD) |
 | Fire HRR variations | 500, 1000, 1500, 2000 kW |
 | Fire location variations | 6 distinct locations across the maze |
 | Ventilation | All scenarios: both end doors open (fixed) |
+| Single-scenario CPU time | ~23 minutes (validated empirically) |
 
 ### Compute
 
@@ -75,6 +115,26 @@ discarded during data extraction.
 | Training GPU | NVIDIA A100 40 GB on RunPod |
 | Coordinate system | Metres, Z-up, world origin at corner (0, 0, 0) |
 | Units | **SI only** — m, s, °C, ppm. NEVER mm. |
+
+---
+
+## Team Roles (Who Does What)
+
+The project is a 4-person team with parallel workstreams.
+
+| Member | Primary responsibility | Modules owned |
+|--------|----------------------|---------------|
+| **A** | Building modeling, FDS simulations, scenario design | PyroSim, FDS configs, scenario_config.json |
+| **B** | Model training (ConvLSTM, PI-FNO) | `src/models/`, `src/training/` |
+| **C** | Data pipeline, dataset, normalization | `src/shared/`, `src/data_pipeline/`, `src/dataset/` |
+| **D** | Evaluation, integration, visualization | `src/evaluation/`, `src/integration/`, `src/visualization/`, paper |
+
+Risk map and path planning (Weeks 10–11) are shared by B and C as the
+team's joint workload.
+
+**Claude Code is delegated to**: code implementation under all members'
+guidance. Claude Code does NOT make scope decisions, hyperparameter
+choices, or scientific judgment calls — those go to humans.
 
 ---
 
@@ -121,7 +181,13 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 class RiskMap(ABC):
-    """Abstract risk map. Three concrete implementations live in src/risk_map/."""
+    """Abstract risk map.
+
+    Three concrete implementations live in src/risk_map/.
+    Both data_pipeline (validation) and PyBullet integration use this same
+    query() interface. Code that consumes risk maps does not need to know
+    which implementation is in use.
+    """
 
     @abstractmethod
     def query(
@@ -130,7 +196,9 @@ class RiskMap(ABC):
         t: float | None = None,    # simulation time in seconds
     ) -> float | np.ndarray:
         """Returns danger ∈ [0, 1].
-        Out-of-bounds → 1.0  (safety default)
+
+        Out-of-bounds → 1.0  (safety default — drone going outside building
+                              should be flagged dangerous).
         Out-of-time-range → 1.0
         """
 ```
@@ -142,9 +210,6 @@ Three concrete implementations:
 | `FDSRiskMap` | data_pipeline, validation | Ground truth from FDS data |
 | `FNORiskMap` | evaluation | PI-FNO inference results |
 | `DynamicRiskMap` | PyBullet demo (Week 12) | Time-evolving live map |
-
-All three share the same `query()` interface. PyBullet code never knows
-which is in use — same call signature.
 
 ---
 
@@ -158,7 +223,7 @@ which is in use — same call signature.
 | FED (CO cumulative) | — | 0.3 (sensitive population) |
 
 Sources: ISO 13571:2012 §5–7; SFPE Handbook 5th Ed. Ch. 63 (Purser & McAllister 2016).
-See `docs/risk_indicators.md` for derivation and Korean-language glossary.
+See `docs/risk_indicators.md` for full derivation and Korean glossary.
 
 ---
 
@@ -188,17 +253,20 @@ the data pipeline:
 1. **NEVER set `VECTOR=.TRUE.` on `&SLCF`.**
    Combination of `VECTOR=.TRUE.` and `CELL_CENTERED=.TRUE.` causes
    `fdsreader` to fail with broadcast errors during slice loading.
-   Use scalar slices only (3 slices: T, V, CO).
+   Use scalar slices only (3 slices: T, V, CO). See L-001.
 
-2. **Always use `CELL_CENTERED=.TRUE.`** for SLCF data we feed into models.
+2. **SLCF Z range MUST be exactly `0.0, 3.0`** (not 3.2 or 3.5).
+   PyroSim may auto-set this to 3.5 to accommodate STL height 3.2 m.
+   Manual fix required. See L-009 and D-015.
 
-3. **`DT_SLCF=10.0`** to align with model time step.
+3. **Always use `CELL_CENTERED=.TRUE.`** for SLCF data we feed into models.
 
-4. **SLCF `XB` must extract** the learnable region [0, 30] × [0, 20] × [0, 3]
-   even when the MESH is larger. The MESH may extend beyond for
-   ventilation boundaries; the SLCF clips to the actual building footprint.
+4. **`DT_SLCF=10.0`** to align with model time step.
 
-5. Three SLCF only: `TEMPERATURE`, `SOOT VISIBILITY` (or `VISIBILITY`),
+5. **SLCF `XB` must extract** the learnable region [0, 30] × [0, 20] × [0, 3]
+   even when the MESH is larger.
+
+6. Three SLCF only: `TEMPERATURE`, `SOOT VISIBILITY` (or `VISIBILITY`),
    `VOLUME FRACTION` (with `SPEC_ID='CARBON MONOXIDE'`).
 
 Example correct SLCF:
@@ -214,8 +282,36 @@ Wrong (causes fdsreader failure):
 &SLCF QUANTITY='TEMPERATURE',
       VECTOR=.TRUE.,            ← REMOVE THIS LINE
       CELL_CENTERED=.TRUE.,
-      ID='Temperature', XB=...
+      ID='Temperature',
+      XB=0.0,30.0, 0.0,20.0, 0.0,3.5/   ← MUST BE 3.0
 ```
+
+---
+
+## fdsreader Standard Pattern
+
+This is the canonical way to load FDS data. Use verbatim in any module.
+
+```python
+import fdsreader
+from pathlib import Path
+
+sim = fdsreader.Simulation(str(Path(fds_dir)))
+
+# Filter by quantity name (matches the SLCF QUANTITY in .fds file)
+temp_slc = sim.slices.filter_by_quantity("TEMPERATURE")[0]
+vis_slc  = sim.slices.filter_by_quantity("SOOT VISIBILITY")[0]
+co_slc   = sim.slices.filter_by_quantity("CARBON MONOXIDE VOLUME FRACTION")[0]
+
+# Returns (T, nx, ny, nz) array AND coordinate dict in world metres
+grid, coords = temp_slc.to_global(return_coordinates=True)
+
+# coords['x'] = [0.25, 0.75, ..., 29.75]   ← cell centres in world metres
+# Because origin is aligned, these ARE world coordinates. No transformation.
+```
+
+For pre-conditions (CELL_CENTERED required, VECTOR forbidden, etc.) see
+`docs/coordinate_convention.md`.
 
 ---
 
@@ -255,21 +351,54 @@ Every computational module must have:
 
 ## 14-Week Schedule Reference
 
-| Week | Module | Status |
-|------|--------|--------|
-| 1–2  | Environment setup, building modeling (PyroSim) | — |
-| 3–5  | FDS scenario generation (30 runs) | In progress |
-| 6    | Data pipeline: extraction, normalisation, masks | — |
-| 7    | ConvLSTM baseline | — |
-| 8    | PI-FNO no-PI version | — |
-| 9    | PI-FNO full (with physics-informed loss) | — |
-| 10   | EXP-FIRE-001 evaluation + risk map module | — |
-| 11   | Path planning + ablations | — |
-| 12   | EXP-PATH-001 + PyBullet integration demo | — |
-| 13   | Visualisation, slides | — |
-| 14   | Paper draft, code cleanup | — |
+| Week | Module | Owner |
+|------|--------|-------|
+| 1–2  | Environment setup, building modeling (PyroSim) | A |
+| 3–5  | FDS scenario generation (30 runs) | A |
+| 6    | Data pipeline: extraction, normalisation, masks | C |
+| 7    | ConvLSTM baseline + over-fit test | B |
+| 8    | PI-FNO no-PI version | B |
+| 9    | PI-FNO full + EXP-FIRE-001 | B + D |
+| 10   | Risk map module + EXP-RISK-001 | B + C |
+| 11   | Path planning + ablations | B + C |
+| 12   | EXP-PATH-001 + PyBullet integration | D + all |
+| 13   | Visualisation, slides | D |
+| 14   | Paper draft, code cleanup | all |
 
-See `docs/manual_v2.md` for week-by-week detail.
+See `docs/manual_v2.md` for week-by-week details, deliverables, and
+validation criteria.
+
+---
+
+## Three Critical Experiments
+
+The project is structured around three named experiments. Each produces a
+clear table for the final paper and presentation.
+
+| Experiment | Compares | Output |
+|------------|----------|--------|
+| **EXP-FIRE-001** | ConvLSTM vs FNO no-PI vs FNO full | RMSE/SSIM table, OOD generalization |
+| **EXP-RISK-001** | FDS ground truth vs PI-FNO predicted risk maps | IoU at 0.3/0.5/0.7, FNR, FPR |
+| **EXP-PATH-001** | Dijkstra vs Static avoidance vs Dynamic predictive | Cumulative FED, reach time |
+
+Plus three **ablations** (Week 11):
+- PI loss components contribution
+- Training data size vs performance curve
+- Model size variation (optional)
+
+---
+
+## Plan B — Failure Scenarios
+
+Anticipate these. Each has a documented response in `docs/manual_v2.md`.
+
+| Failure | Response |
+|---------|----------|
+| FDS scenarios don't finish in Week 5 | Reduce to 20 scenarios, T_END to 180 s |
+| PI-FNO doesn't beat ConvLSTM | Refocus paper on "30-scenario regime trade-offs" |
+| RunPod cost exceeds budget | Switch to Spot only, drop Ablation 3, drop PyBullet demo |
+| Coordinate system bugs | Re-validate via `docs/coordinate_convention.md` checklist |
+| Team member overload | Cut PyBullet demo, Ablation 3, Tier 1 GNN; preserve EXP-* |
 
 ---
 
@@ -290,6 +419,7 @@ See `docs/manual_v2.md` for week-by-week detail.
 - **Reference checks before improvement**: confirm interface change is
   necessary before modifying contracts
 - **Log major decisions** to `docs/decisions.md` after agreement
+- **Log new bugs** to `docs/lessons_learned.md` after fixing
 
 ### Communicating with this project
 
@@ -304,15 +434,15 @@ See `docs/manual_v2.md` for week-by-week detail.
 
 ```
 src/shared/        — coordinates, constants, building, normalisation
-src/data_pipeline/ — FDS .smv/.sf → .npz conversion
-src/dataset/       — PyTorch Dataset and DataLoaders
-src/models/        — ConvLSTM, PI-FNO, base classes, losses
-src/training/      — training loops, callbacks
-src/evaluation/    — metrics, model comparison (EXP-FIRE-001)
-src/risk_map/      — risk map conversion, ASET, FED, predictive
-src/path_planning/ — graph, A*, evacuation simulator
+src/data_pipeline/ — FDS .smv/.sf → .npz conversion (Week 6)
+src/dataset/       — PyTorch Dataset and DataLoaders (Week 6)
+src/models/        — ConvLSTM, PI-FNO, base classes, losses (Week 7-9)
+src/training/      — training loops, callbacks (Week 7-9)
+src/evaluation/    — metrics, model comparison (Week 9-10)
+src/risk_map/      — risk map conversion, ASET, FED, predictive (Week 10)
+src/path_planning/ — graph, A*, evacuation simulator (Week 11)
 src/integration/   — PyBullet demo (Week 12)
-src/visualization/ — plots, animations
+src/visualization/ — plots, animations (Week 13)
 configs/           — YAML hyperparameters per module
 experiments/       — executable scripts (exp_*, ablation_*)
 notebooks/         — exploratory analysis only (not production code)
@@ -341,3 +471,35 @@ figures/           — paper/slide figures
 | Decision log | `docs/decisions.md` |
 | Lessons learned | `docs/lessons_learned.md` |
 | Task request template | `docs/task_request_template.md` |
+
+---
+
+## Current Project State (Update as You Progress)
+
+**Last data validation**: `0507_v1` simulation has SLCF Z=3.5 issue.
+Awaiting re-simulation with SLCF Z=3.0 fix (see L-009).
+
+**Next milestone**: Validate fdsreader on corrected single-scenario data,
+then implement `src/data_pipeline/fds_extractor.py` (Week 6 work).
+
+**Active blockers**: None — STL fix and SLCF fix can both proceed in parallel.
+
+---
+
+## Quick Reference for Claude Code Sessions
+
+When you start a new session and don't know what to do:
+
+1. Read this file (you are here)
+2. Check **"Current Project State"** above for last status
+3. Check `docs/manual_v2.md` for week-by-week schedule
+4. If a specific task is requested, follow `docs/task_request_template.md`
+5. Before writing code, confirm tensor shapes in `docs/interface_contracts.md`
+
+When you finish a task:
+
+1. Run the self-test (`__main__` block prints PASS)
+2. Run pytest for relevant test file
+3. Update **"Current Project State"** above with new status
+4. If a new bug was found and fixed, append to `docs/lessons_learned.md`
+5. If a new design decision was made, append to `docs/decisions.md`

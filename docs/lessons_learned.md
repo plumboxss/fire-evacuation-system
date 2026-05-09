@@ -3,6 +3,8 @@
 > Concrete bugs, gotchas, and surprises encountered during the project.
 > Each entry documents the symptom, root cause, and fix to prevent
 > repeat occurrences.
+>
+> **Append-only**. When new bugs are found and fixed, add `L-NNN` entries.
 
 ---
 
@@ -249,15 +251,132 @@ URDF correctly.
 
 ---
 
-## How to add a lesson
+## L-009: SLCF Z range must be exactly (0, 3), not (0, 3.5)
+
+**Symptom**:
+
+```
+ValueError: could not broadcast input array from shape (61,41,9)
+into shape (61,41,8)
+```
+
+Plus `n_t` reported as 6 instead of 31 — silent data loss.
+
+**Root cause**:
+
+PyroSim auto-set SLCF Z range to `0.0, 3.5` (rounded up to accommodate
+STL height of 3.2 m). With 0.5 m resolution, this produces 9 z-cells,
+but our `(60, 40, 6)` interface expects 6 z-cells. The mismatch causes
+fdsreader to silently lose time frames and then raise a broadcast error.
+
+**Fix**:
+
+Manually set SLCF Z range to exactly `0.0, 3.0` in PyroSim:
+
+```fortran
+&SLCF QUANTITY='TEMPERATURE',
+      CELL_CENTERED=.TRUE.,
+      ID='Temperature',
+      XB=0.0,30.0, 0.0,20.0, 0.0,3.0/      ← must be 3.0, not 3.5
+```
+
+This must be done for all 3 SLCF slices (Temperature, Visibility, CO).
+
+**Why we keep STL height at 3.2 m**: The physical building shape is
+preserved. Only the SLCF extraction window is clamped to 0–3 m. The
+0.2 m above is the hottest smoke layer but not relevant to occupant
+breathing-zone analysis. See decision D-015.
+
+**Status**: Fixed. Documented in `CLAUDE.md` "FDS Input File Conventions"
+section, `coordinate_convention.md`, and decision D-015.
+
+---
+
+## L-010: STL files in millimetres, not metres
+
+**Symptom**:
+
+When importing the STL into PyroSim, building bounding box was reported
+as 30,000 m × 18,270 m × 3,200 m (instead of 30 m × 18.27 m × 3.2 m).
+FDS simulation ran but produced nonsensical fire spread.
+
+**Root cause**:
+
+The STL was created in CAD software using millimetres as the default unit.
+PyroSim defaults to metres, so the values are interpreted directly without
+unit conversion.
+
+**Fix**:
+
+Two options:
+
+**(A) PyroSim direct fix**: When importing STL, set the import unit to
+"Millimeter" so PyroSim performs the 1/1000 scale conversion.
+
+**(B) Pre-convert STL**: Use the conversion script in
+`scripts/convert_stl_units.py` (uses `numpy-stl`):
+
+```python
+import numpy as np
+from stl import mesh
+
+m = mesh.Mesh.from_file("SCIENCE_HALL_LV5.stl")
+m.vectors *= 0.001  # mm → m
+m.translate([-x_min, -y_min, -z_min])  # translate to origin
+m.save("SCIENCE_HALL_FIXED.stl")
+```
+
+Always verify after fix:
+
+```python
+print(f"X range: {m.vectors[:, :, 0].min():.2f} to {m.vectors[:, :, 0].max():.2f}")
+# Expected: 0.0 to ~30.0
+```
+
+**Status**: Fixed for current STL. Future STLs from CAD must be checked
+for units before PyroSim import.
+
+---
+
+## L-011: PI-FNO autoregression error compounds
+
+**Symptom** (anticipated for Week 9):
+
+After 3-4 autoregressive steps, predictions drift away from physical
+plausibility — temperatures may go negative, CO concentrations may
+oscillate.
+
+**Root cause**:
+
+Each prediction step has small errors. Feeding these errors back as
+input to the next step compounds them. Beyond 3-4 steps (30-40 s),
+the model is operating outside its training distribution.
+
+**Fix** (planned):
+
+1. Limit autoregressive horizon to ~3 steps for direct use, 6 steps
+   only for the dynamic risk map (where it's only used for path
+   planning, not safety-critical evacuation decisions).
+2. Add monotonicity constraint on tenability boundary (Stage 4 PI loss)
+   to discourage non-physical oscillations.
+3. Re-clip outputs to [0, 1] explicitly between steps.
+4. Document predictions beyond 30s as "best-effort estimates" rather
+   than reliable guidance.
+
+**Status**: Planned. Will be addressed in Week 9 when PI-FNO is trained
+and Week 10 when DynamicRiskMap is built.
+
+---
+
+## How to Add a Lesson
 
 When you encounter and fix a bug worth remembering:
 
 1. Add a new section labeled `L-NNN`.
-2. Symptom (literal error or behaviour observed).
-3. Root cause (why it happened).
-4. Fix (the actual change that resolved it).
-5. Status (Fixed / Open / Workaround).
+2. **Symptom** (literal error or behaviour observed).
+3. **Root cause** (why it happened).
+4. **Fix** (the actual change that resolved it).
+5. **Status** (Fixed / Open / Workaround / Planned).
 6. Cross-reference docs that were updated.
 
 Keep entries concise — 3–8 sentences each. Append-only.
