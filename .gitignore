@@ -129,6 +129,7 @@ checkpoints/**/final.pt
 !checkpoints/fno_no_pi/best.pt
 !checkpoints/fno_pi/best.pt
 !checkpoints/tier1_gnn/best.pt
+!checkpoints/tier1_gnn_v3/best.pt
 
 # ─────────────────────────────────────────────────────────────────────────
 # Weights & Biases run logs (offline runs, debug logs)
