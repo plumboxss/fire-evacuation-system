@@ -140,11 +140,11 @@ wandb/
 # Generated figures (regenerable via scripts/*.py)
 # Subdirectories are ignored; root-level canonical figures are kept.
 # ─────────────────────────────────────────────────────────────────────────
-figures/eval_convlstm/
-figures/risk_compare/
-figures/first_sim/
-figures/sim_*/
-figures/scenario_*/
+# legacy moved (figures/legacy/eval_convlstm/)
+# legacy moved (figures/legacy/risk_compare/)
+# legacy moved (figures/legacy/first_sim/)
+# legacy moved (figures/legacy/sim_*/)
+# legacy moved (figures/legacy/scenario_*/)
 
 # Allow root-level canonical artefacts (commit explicitly with `git add -f` if needed)
 !figures/.gitkeep

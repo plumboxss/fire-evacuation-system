@@ -1,0 +1,216 @@
+# 40 — Tier 2: Continuous T/V/CO Models
+
+> ConvLSTM / FNO no-PI / FNO PI 모델 명세. Full-SLCF (ideal) 와 Sparse-sensor
+> (real deployment) 두 가지 deployment context.
+
+---
+
+## 1. Tier 2 시스템 개요
+
+**입력**: 39 sensor 위치의 continuous T/V/CO 측정값 (또는 full SLCF training 시)
+**출력**: (3, 60, 40, 6) per-cell future T/V/CO (10 s 단일 step, autoregress 6 회 → 60 s)
+**Risk Map**: ConvLSTM/FNO 출력 → `prediction_to_danger` → StaticRiskMap
+
+---
+
+## 2. 학습 데이터
+
+### 2.1 Training pairs (33 시나리오, 990 pair)
+
+`data/processed/dataset.h5` 의 sliding pair:
+- `(input[t], target[t+1])`: 한 frame → 다음 frame
+- 각 scenario 30 pair, 33 scenarios → 990 pair total
+
+### 2.2 정규화
+
+| 채널 | Raw 단위 | Normalization |
+|---|---|---|
+| T | °C | `(T − 20) / 1180`, clip [0, 1] |
+| V | m | `1 − clip(V / 30, 0, 1)` (inverse!) |
+| CO | ppm | `log1p(CO) / log1p(5000)`, clip [0, 1] |
+
+→ 모든 채널 [0, 1], **higher = more dangerous**.
+
+---
+
+## 3. 모델 아키텍처
+
+### 3.1 ConvLSTM 3D
+
+**구현**: `src/models/conv_lstm_3d.py`
+
+```python
+FireConvLSTM(
+    in_channels=5,
+    out_channels=3,
+    hidden_dim=32,
+    kernel_size=(3, 3, 3),
+    num_layers=2,
+)
+# Parameters: 349,411
+# Checkpoint size: 1.4 MB
+```
+
+3D conv + LSTM gate. Spatial 3D convolution (k=3×3×3) + temporal recurrence.
+
+**Forward signature**:
+```python
+forward(x: (B, 5, 60, 40, 6)) -> (B, 3, 60, 40, 6)
+```
+
+### 3.2 FNO (Fourier Neural Operator)
+
+**구현**: `src/models/fno_model.py` (wraps `neuralop.models.FNO`)
+
+```python
+FNOFireModel(
+    n_modes=(12, 12, 4),         # Fourier truncation
+    in_channels=5,
+    out_channels=3,
+    hidden_channels=32,
+    n_layers=4,
+    lifting_channels=128,
+    projection_channels=128,
+)
+# Parameters: 1,780,000+
+# Checkpoint size: 41 MB
+```
+
+Spectral basis (FFT) — 큰 receptive field, smooth global pattern 학습.
+
+### 3.3 PI-FNO (Physics-Informed FNO)
+
+**구현**: 같은 `FNOFireModel` + `src/models/pi_losses.py` (학습 시 추가 loss).
+
+PI loss components (curriculum learning, weight ramp):
+- `pde_heat`: heat diffusion residual (energy 보존)
+- `pde_species`: species transport residual (CO/visibility)
+- `boundary`: 벽 = no-flux 조건
+
+`configs/pi_fno.yaml` 에 weight 명시 (data 1.0, pde_heat 0.1, pde_species 0.05, boundary 0.01).
+
+---
+
+## 4. 학습 결과 (33 시나리오, RunPod A100)
+
+| 모델 | Train loss (epoch 99) | 학습 시간 | Best ckpt |
+|---|---|---|---|
+| ConvLSTM | 0.00104 | ~2시간 CPU | `checkpoints/conv_lstm/best.pt` |
+| **FNO no-PI** | **0.00047** (50% lower!) | ~15분 A100 | `checkpoints/fno_no_pi/best.pt` |
+| FNO PI | (epoch 99 ckpt) | ~15분 A100 | `checkpoints/fno_pi/best.pt` |
+
+→ FNO 가 training distribution 에 더 잘 fit. 단 OOD generalization 은 ConvLSTM 이 우위 (H3 partial fail).
+
+---
+
+## 5. 평가 방식 — 2가지 Deployment Context
+
+### 5.1 Full-SLCF (Ideal Upper Bound)
+
+**가정**: 14,400 cell 모두 측정 가능 (현실 X, training 시 가정).
+**평가**: `scripts/evaluate_t_locations.py` + `scripts/visualize_60s_prediction.py`
+
+**결과** (13 OOD T01-T05, t₀=120s autoregress 60s):
+
+| Model | IoU step 6 | RMSE °C | FNR step 6 |
+|---|---|---|---|
+| ConvLSTM | **0.92** | 5.68 | ~6% |
+| FNO no-PI | 0.82 | 6.98 | ~7% |
+| FNO PI | 0.89 | 6.86 | ~5% |
+
+→ ConvLSTM 이 ideal regime 에서 최고. **H3 의 reverse** (FNO 가 generalize 더 잘 하지 못함).
+
+### 5.2 Sparse-sensor (Real Deployment) — 39 sensors
+
+**가정**: 39 sensor 위치만 측정값 보존, 나머지 0 → 보간 → 모델 forward.
+**평가**: `scripts/evaluate_sparse_sensing_geodesic.py`
+
+#### 보간 방법
+
+| 방법 | 거리 metric | 벽 인식 |
+|---|---|---|
+| **Linear** (Euclidean) | scipy.griddata linear | ❌ 벽 무시 |
+| **Geodesic IDW** | BFS on fluid cells | ✅ 벽 우회 |
+
+#### 결과 (13 OOD, t₀=120s, +60s lookahead)
+
+| 보간 | 모델 | IoU step 6 | RMSE step 6 | FNR step 6 |
+|---|---|---|---|---|
+| Linear | ConvLSTM | 0.211 | 0.432 | 38% |
+| Linear | FNO no-PI | 0.351 | 0.268 | 41% |
+| Linear | FNO PI | 0.250 | 0.362 | 41% |
+| **Geodesic** | ConvLSTM | 0.212 | 0.443 | 25% |
+| **Geodesic** | **FNO no-PI** ★ | **0.431** | **0.243** | 33% |
+| **Geodesic** | FNO PI | 0.317 | 0.330 | 30% |
+
+**핵심**:
+- 13/13 시나리오 모든 조합이 H5 (0.70) 미달
+- Best: FNO no-PI + geodesic = **0.431** (H5 마진 -0.27)
+- **Geodesic 이 FNO 에서 +0.08 개선**, ConvLSTM 은 둔감 (+0.001)
+- Linear → Geodesic: 보간 자체 RMSE °C 4° 감소
+
+### 5.3 보간 시각화
+
+`figures/current/03_sparse_interpolation/`:
+- `method_comparison_geodesic.png` — Linear vs Geodesic 막대 비교
+- `snapshot_T05_geodesic.png` — 한 시나리오의 truth vs linear interp vs geodesic interp + error
+
+---
+
+## 6. Sparse-input Retrain — Track 1B (사용자 학습 진행)
+
+**아이디어**: 모델 architecture 그대로, **input format 만 sparse 로 학습**.
+
+**구현**: `scripts/train_sparse_conv_lstm.py`
+- `SparseFireDataset`: dataset.h5 의 input 을 sparse 로 즉시 변환 (in-memory)
+- 모델 (ConvLSTM) in_channels=5 그대로
+- T/V/CO 채널을 39 sensor cell 만 nonzero
+- Target 은 full dense → 모델이 sparse → dense 직접 학습
+
+**Smoke test (5 epoch warm-start, 16 sensor 버전)**:
+- Test IoU step 6: 0.20 (boilerplate 검증)
+
+**Full 학습 (39 sensor 버전, 사용자 진행 중)**:
+- 결과 도착 시 `70_results_summary.md` 갱신
+
+---
+
+## 7. 핵심 관찰 — Tier 2 의 한계
+
+### 7.1 정보 bottleneck
+
+39 sensor × 6 z = 234 cells / 14,400 = **1.6%** 만 nonzero T/V/CO.
+보간 단계에서 정보 손실 발생 — 모델 capacity 보다 dominant.
+
+### 7.2 ConvLSTM 의 둔감성
+
+| Sensor 수 | ConvLSTM geodesic IoU |
+|---|---|
+| 16 | 0.41 |
+| 27 | 0.41 |
+| 39 | 0.21 |
+
+→ 39 sensor 에서 오히려 IoU 하락. 새 위치 분포가 ConvLSTM 의 learned spatial pattern 과 mismatch.
+
+### 7.3 FNO 가 sparse regime 에서 우위
+
+| Sensor 수 | FNO no-PI geodesic IoU |
+|---|---|
+| 16 | 0.375 |
+| 27 | 0.313 |
+| **39** | **0.431** |
+
+→ Fourier basis 가 더 dense 한 보간 결과를 자연스럽게 처리. H3 의 **부분 검증** (sparse regime 에서 FNO > ConvLSTM).
+
+---
+
+## 8. Tier 2 의 사용처
+
+| 시나리오 | 권장 |
+|---|---|
+| Paper 의 ideal upper bound | ConvLSTM (IoU 0.92) |
+| 39 sensor sparse deployment | **FNO no-PI + geodesic IDW** (IoU 0.43) |
+| Drone 의 임의 위치 query | Tier 1 (per-node) + Tier 2 (cell) ensemble |
+| 단독 추천 (대부분 시나리오) | **Tier 1 GNN** (Tier 2 sparse 보다 2.1× 우수) |
+
+→ Tier 2 는 paper 의 *비교군* + drone 의 high-resolution 보강 용도. 단독 deployment 는 Tier 1 권장.
