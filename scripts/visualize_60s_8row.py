@@ -237,6 +237,19 @@ def main() -> int:
         ens = np.clip(ens, 0.0, 1.0).astype(np.float32)
         preds[f"3-way Ensemble (w={W_GNN},{W_CONV},{W_FNO} geo) ★"] = ens
 
+        # ─── Mask-out solid (non-fluid) cells for visual fairness ─────
+        # Reason: GNN k-NN IDW does not respect the building mask. Geodesic
+        # distance is infinite into solid cells → fallback to equal weight
+        # → solid cells get the mean GNN node danger (~0.5). The 3-way
+        # ensemble then renders solid regions as yellow (~0.25), while
+        # other rows are trained with the mask channel and output ~0 there.
+        # IoU/FNR metrics are already mask-filtered, so this only fixes
+        # the visualization — solid → exactly 0.0 (deep green).
+        fluid_mask = (mask > 0.5).astype(np.float32)         # (X, Y, Z)
+        for k in list(preds.keys()):
+            preds[k] = preds[k] * fluid_mask[None, ...]
+        truth_window = truth_window * fluid_mask[None, ...]
+
         out_path = args.out_dir / f"{sname}_grid_8row_t0_{int(args.t0):03d}.png"
         plot_nrow(truth_window, preds, sname, args.t0, out_path)
         print(f"  -> {out_path}")
