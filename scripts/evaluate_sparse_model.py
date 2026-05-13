@@ -115,11 +115,8 @@ def build_sparse_input(slices: Dict[str, np.ndarray],
     mask_b = np.broadcast_to(mask.astype(np.float32)[None, :, :, :], expected).astype(np.float32)
     te_grid = np.broadcast_to(te[:, None, None, None], expected).astype(np.float32)
     inp = np.stack([T, V, CO, mask_b, te_grid], axis=1).astype(np.float32)
-    # Sparsify T, V, CO channels
-    not_sensor = ~sparse_ind
-    for c in range(3):
-        inp[:, c, not_sensor[..., 0]] = 0.0  # broadcast across batch dim if needed
-    # Wait: not_sensor is (X, Y, Z) shape, we need to broadcast over time
+    # Sparsify T, V, CO channels — sensor 위치 외 cell 의 T/V/CO 를 0 으로
+    not_sensor = ~sparse_ind  # (X, Y, Z) bool
     for c in range(3):
         for t in range(N_TIMESTEPS):
             inp[t, c][not_sensor] = 0.0
