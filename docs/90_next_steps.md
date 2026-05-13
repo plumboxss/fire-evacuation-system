@@ -1,6 +1,9 @@
 # 90 — Next Steps & Roadmap
 
 > 잔여 작업, 우선순위, 새 세션 시작 시 진행 방법.
+>
+> **Last updated**: 2026-05-14 (compact 직전).
+> **새 세션 진입 시**: 이 파일 + `docs/CURRENT_SESSION_STATE.md` 만 읽으면 됨.
 
 ---
 
@@ -9,11 +12,13 @@
 | # | 작업 | 시간 | 의존성 | 가치 |
 |---|---|---|---|---|
 | **★★★** | **Tier1RiskMap + Path planning + EXP-PATH-001** (H6 검증) | 5-7시간 | 없음 | Paper 헤드라인 가설 |
-| **★★** | Sparse-input ConvLSTM 결과 수집 + L4e 갱신 | 30분 (사용자 학습 끝나면) | 사용자 학습 결과 도착 | Layer 표 완성 |
-| **★★** | Tier 1 GNN inference time 측정 (H1) | 30분 | GNN ckpt | H1 수치 확정 |
-| ★ | PyBullet Week 12 통합 (외주) | 외부 | URDF 생성 | 발표용 데모 영상 |
-| ★ | Tier 1 + Tier 2 ensemble (drone query) | 2-3시간 | Tier1RiskMap | 보조 contribution |
-| ★ | 페이퍼 draft + 발표 슬라이드 | 다수 세션 | 위 작업 완료 | 최종 deliverable |
+| ✅ | ~~Sparse ConvLSTM~~ | — | — | 완료 (IoU 0.581 w/ re-sparsify) |
+| ✅ | ~~Sparse FNO 6-ch~~ | — | — | 완료 (IoU 0.525, FNR 10.4%) |
+| ✅ | ~~3-way ensemble + geodesic~~ | — | — | 완료 (IoU 0.618, FNR 3.7-5.1%) |
+| **★★** | Tier 1 GNN inference time 측정 (H1 정밀화) | 30분 | GNN ckpt | H1 수치 확정 |
+| ★ | 3-way ensemble visualization (6-row + ensemble row) | 1시간 | 기존 ckpt | 발표 figure |
+| ★ | PyBullet Week 12 통합 (외주) | 외부 | URDF + Tier1RiskMap | 발표용 데모 영상 |
+| ★ | 페이퍼 draft + 발표 슬라이드 | 다수 세션 | H6 결과 | 최종 deliverable |
 
 ---
 

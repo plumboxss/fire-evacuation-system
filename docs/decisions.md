@@ -419,6 +419,170 @@ Zone 별 분포 표 (A:3, B:5, C:4, D:5 = 17 방) + 복도 7 + 출구 3 = **27**
 
 ---
 
+## D-024 v3.3: 감지기 위치 27 → 39 개 확장 + 위치 정밀화 (D-024 1차 개정)
+
+**Date**: 2026-05-13 (저녁, 평면도 2차 검토 후)
+
+**Decision**:
+D-024 (27개) 를 폐기하고 **39개로 확장**. 사용자가 제공한 평면도 사진 (RED=room
+중앙, BLUE=corridor 분기점/출구 직전) 기반으로 위치 재배치:
+
+| 영역 | 개수 | 비고 |
+|---|---|---|
+| 방 (Room) | 22 | 작은 방 1개, 큰 방 2-3개. 모든 방에 1개 이상. |
+| 복도 (Corridor) | 14 | 분기점·교차점에 추가. NFPA 72 spacing 9 m 이내. |
+| 출구 (Exit-side) | 3 | NE / SW / 중앙 출구 직전 1개씩 |
+| **합계** | **39** | |
+
+모든 감지기: **z = 2.5 m** 유지.
+
+**Rationale**:
+- 27개 (D-024 v1) 로 GNN 학습 시 일부 큰 방·복도 분기점에서 공백 발생.
+  사용자가 평면도에서 직접 빨강/파랑 점 표시해서 수정 지시.
+- 39개로 늘려도 NFPA 72 spacing 9 m 이내 (실측 최대 7 m) 준수.
+- "v2 잘못되었어 내가 보내줄 사진 기반으로" → v3 → v3.1 → v3.2 → v3.3 반복.
+  v3.3 가 사용자 최종 승인 버전.
+
+**Implementation**:
+- `src/tier1/detector_positions.py`: `ALL_DETECTORS` 가 39개 (`D-001`~`D-039`).
+- `get_detector_positions_legacy_format()` 도 39개 반환.
+- 모든 down-stream (GNN/Sparse ConvLSTM/Sparse FNO/sensor indicator channel)
+  자동으로 39 sensors 로 학습/평가.
+- 기존 결과: 39 sensors 기준 Tier 1 GNN IoU 0.904, Sparse ConvLSTM 0.581, Sparse FNO 0.525.
+
+**Status**: Implemented + locked. 모든 down-stream 학습/평가가 39 sensors 기반.
+
+---
+
+## D-025: Sparse 모델 autoregress 시 re-sparsify (L-013 fix) 를 default 운용 방식으로 채택
+
+**Date**: 2026-05-14
+
+**Decision**:
+Sparse-input 모델 (ConvLSTM, FNO) 의 60s autoregress 평가/배포 시
+**매 step 마다 sensor 외 cell 의 T, V, CO 를 0 으로 강제** (re-sparsify).
+이전 step 의 dense prediction 을 직접 다음 step input 으로 chaining 하지 않음.
+
+**Alternatives**:
+- (A) Naïve chaining: dense pred → 다음 step input. 학습-추론 분포 불일치 발생.
+- (B) Re-sparsify: 매 step 의 measurement update 모방 (실 deployment 와 일치).
+- (C) Hybrid: 30s 마다 partial 재측정. (deployment 복잡, 효과 미검증)
+
+**Rationale**:
+- Sparse 모델은 (sparse input → dense target) 으로 학습됨. Naïve chaining 은
+  학습 본 적 없는 (dense → dense) 분포로 forward → drift.
+- Naïve chaining 결과 (50 epoch, sparse ConvLSTM v3): IoU **0.182**, FNR 0%.
+  conservative over-prediction 으로 수렴 (모든 cell을 위험으로 분류).
+- Re-sparsify 적용 후 같은 ckpt: IoU **0.581** (3.2× 향상), FNR 23.0%.
+- Sparse FNO v3 (6-ch + sensor indicator): re-sparsify 적용시 IoU 0.525, FNR 10.4%.
+- 실 deployment 와 일치: 매 10 s 마다 sensor 가 새 measurement 를 push.
+
+**Implementation**:
+- `scripts/evaluate_sparse_model.py`: `--resparsify` 플래그 (⚠ default False).
+  **반드시 `--resparsify` 추가** 해서 호출할 것.
+- `scripts/evaluate_sparse_fno.py`: `autoregress_sparse_fno(resparsify=True)` default.
+- `scripts/visualize_60s_5model.py`, `visualize_60s_6model.py`: 모두 `resparsify=True`.
+- Ensemble (`evaluate_ensemble.py`, `evaluate_ensemble_3way.py`): Tier 2 컴포넌트
+  자동 re-sparsify 적용.
+
+**Status**: Implemented. Sparse Tier 2 의 모든 평가·시각화·ensemble 에서 적용 중.
+L-013 lessons_learned 에 root cause + fix 상세.
+
+---
+
+## D-026: 3-way ensemble (GNN + Sparse ConvLSTM + Sparse FNO) + geodesic node→cell projection 을 cell-level deployment 의 reference 구성으로
+
+**Date**: 2026-05-14
+
+**Decision**:
+Tier 1 GNN per-node 출력 (39, 6) 을 cell grid (60, 40, 6) 로 매핑할 때
+**geodesic IDW (BFS, mask-aware)** 를 사용. Cell-level 위험도는 3-way ensemble:
+
+```
+risk_cell[c, t] = w_t1 · GNN_proj[c, t]
+               + w_conv · SparseConvLSTM[c, t]
+               + w_fno · SparseFNO[c, t]
+```
+
+**Reference weights** (사용 용도별):
+| 용도 | (w_t1, w_conv, w_fno) | IoU | FNR | H5 |
+|---|---|---|---|---|
+| Balanced (paper default) | (0.50, 0.25, 0.25) | 0.618 | 5.1% | 5/13 ✅H4 |
+| Min FNR (safety) | (0.60, 0.10, 0.30) | 0.590 | **3.7%** | 4/13 ✅H4 |
+| Max IoU | (0.40, 0.45, 0.15) | 0.625 | 10.8% | 4/13 |
+
+**Alternatives**:
+- (A) 1-way (각 모델 단독): GNN per-node 만 또는 Sparse 만.
+  - GNN cell-projected 단독 IoU 0.18 (over-smoothing).
+  - Sparse ConvLSTM 단독 IoU 0.581 (H5 4/13 만).
+- (B) 2-way (GNN + 1개 Tier 2): IoU 0.576-0.619, 3-way 보다 FNR 또는 IoU 열세.
+- (C) Euclidean node→cell IDW: FNR 1-1.5%p 더 높음. Wall-aware 안 됨.
+
+**Rationale**:
+- 각 모델이 complementary inductive bias 보유:
+  - GNN: graph + temporal → robust FNR (safety)
+  - ConvLSTM: local conv → cell-level IoU 정확도
+  - FNO: spectral basis → smooth interpolation regime 강점
+- Geodesic IDW (BFS distance) 가 벽 너머 over-smoothing 방지. Euclidean
+  대비 FNR -1~1.5%p 일관 개선 (특히 분리 영역 화재 시).
+- 3-way grid search (30 weight combos × 13 OOD) 로 frontier 확인.
+- Balanced 가 paper headline 용 (IoU/FNR 균형), Min-FNR 가 deployment 용.
+
+**Implementation**:
+- `scripts/evaluate_ensemble.py`: 2-way, `--tier2-arch {fno|conv_lstm}`,
+  `--geodesic-projection`.
+- `scripts/evaluate_ensemble_3way.py`: 3-way grid (30 combos × 13 sims),
+  `--geodesic-projection`.
+- `precompute_node_to_cell_weights(use_geodesic=True)`: BFS from
+  `evaluate_sparse_sensing_geodesic.precompute_geodesic_distances`.
+- 결과: `results/ensemble_3way_geodesic/grid_search.csv`,
+  `figures/current/10_ensemble_3way_geodesic/grid_search.png`.
+
+**Status**: Implemented + verified on 13-OOD. Cell-level deployment 시
+balanced weights default, safety-critical 시 min-FNR weights.
+
+---
+
+## D-027: Paper framing — "Dual surrogate system on shared 39-detector infrastructure"
+
+**Date**: 2026-05-14
+
+**Decision**:
+Paper 의 contribution framing 을 다음과 같이 통일:
+
+> *"Same 39-detector infrastructure, two surrogate signal modes.
+> Tier 1 GNN (binary on/off, 12 K params) recovers 98% of ideal full-SLCF
+> upper bound (IoU 0.92 → 0.90). Tier 2 sparse continuous + re-sparsify +
+> cell-level ensemble closes the FNR gap (10.4% → 3.7%). Together they enable
+> H6 dynamic path planning on legacy infrastructure without additional hardware."*
+
+**Alternatives**:
+- (A) "FNO beats ConvLSTM" framing: H3 partial only. Headline weak.
+- (B) "ConvLSTM baseline + FNO upgrade" framing: 기존 ML papers 와 차별성 약함.
+- (C) Tier 1 GNN 만 강조: 12K params 인상적이지만 contribution 협소.
+- (D) **Selected**: Dual surrogate on shared infrastructure — system-level
+  contribution + ML novelty (binary GNN > continuous sparse) + deployment story.
+
+**Rationale**:
+- 같은 hardware (39 legacy detectors) 에서 binary GNN 과 continuous sparse 양쪽
+  surrogate 를 build → "deployment readiness" 메시지 강함.
+- L1-L4 evaluation layer framework 가 IoU 0.92 (upper bound) → 0.21 (naïve sparse)
+  → 0.90 (Tier 1) → 0.62 (3-way ensemble) gap 을 정량화 → contribution 명확.
+- H6 (Dynamic A* FED reduction) 으로 system-level value 입증.
+- 학술적 시사점: phase-transition (fire spread 는 discrete event) →
+  binary information loss < continuous interpolation loss.
+
+**Implementation**:
+- Paper outline §3 "System Design": Tier 1 / Tier 2 / Shared infrastructure
+- Paper §4 "Experiments": EXP-FIRE-001 / Evaluation layers / EXP-RISK-001 / EXP-PATH-001
+- Paper §5 "Discussion": Phase-transition + spectral basis + capacity vs domain
+- Headline figure: `figures/current/04_tier1_gnn/headline.png` + L1-L4 layer plot
+
+**Status**: Framing locked. 모든 figure / table 이 이 framing 에 정렬됨.
+H6 결과 도착하면 paper draft 시작.
+
+---
+
 ## How to Add a Decision
 
 When making a major scope or interface decision:
