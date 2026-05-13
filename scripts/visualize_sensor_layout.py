@@ -127,17 +127,18 @@ def plot_sensor_layout(
     lc = LineCollection(segments, colors="black", linewidths=1.3, zorder=3)
     ax.add_collection(lc)
 
-    # Group sensors by area for color
+    # Group sensors by area for color — rooms = red shades, corridor = blue, exit = gold
     area_colors = {
-        "zone_a": "tab:red",
-        "zone_b": "tab:orange",
-        "zone_c": "tab:green",
-        "zone_d": "tab:purple",
-        "corridor": "tab:blue",
+        "zone_a": "#d62728",     # red
+        "zone_b": "#d62728",
+        "zone_c": "#d62728",
+        "zone_d": "#d62728",
+        "north":  "#d62728",
+        "corridor": "#1f77b4",   # blue
         "exit": "gold",
     }
     area_markers = {
-        "zone_a": "o", "zone_b": "o", "zone_c": "o", "zone_d": "o",
+        "zone_a": "o", "zone_b": "o", "zone_c": "o", "zone_d": "o", "north": "o",
         "corridor": "s", "exit": "*",
     }
     area_labels: dict[str, bool] = {a: False for a in area_colors}
@@ -147,8 +148,12 @@ def plot_sensor_layout(
         c = area_colors.get(d.area, "black")
         m = area_markers.get(d.area, "o")
         size = 280 if d.area == "exit" else (110 if d.area == "corridor" else 90)
-        label = d.area if not area_labels[d.area] else None
-        area_labels[d.area] = True
+        # Aggregate room areas under single "room" legend
+        legend_cat = ("exit" if d.area == "exit"
+                       else "corridor" if d.area == "corridor"
+                       else "room")
+        label = legend_cat if not area_labels.get(legend_cat, False) else None
+        area_labels[legend_cat] = True
         ax.scatter(
             x, y, s=size, c=c, marker=m,
             edgecolors="black", linewidths=1.0,
@@ -168,13 +173,17 @@ def plot_sensor_layout(
     ax.set_ylim(0, 20)
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
+    n_rooms = sum(1 for d in ALL_DETECTORS if d.node_type == "room")
+    n_corr = sum(1 for d in ALL_DETECTORS if d.node_type == "corridor")
+    n_exits = sum(1 for d in ALL_DETECTORS if d.node_type == "exit")
     ax.set_title(
-        f"D-024 sensor layout @ z={Z_SLICE_M:.2f} m  |  "
-        f"{len(ALL_DETECTORS)} detectors  (17 rooms + 7 corridors + 3 exits)"
+        f"D-024 v2 sensor layout @ z={Z_SLICE_M:.2f} m  |  "
+        f"{len(ALL_DETECTORS)} detectors  "
+        f"({n_rooms} rooms + {n_corr} corridors + {n_exits} exits)"
     )
     # Legend in clean order
     handles, labels = ax.get_legend_handles_labels()
-    order = ["zone_a", "zone_b", "zone_c", "zone_d", "corridor", "exit"]
+    order = ["room", "corridor", "exit"]
     sorted_pairs = sorted(zip(labels, handles), key=lambda p: order.index(p[0]) if p[0] in order else 99)
     sorted_labels = [p[0] for p in sorted_pairs]
     sorted_handles = [p[1] for p in sorted_pairs]

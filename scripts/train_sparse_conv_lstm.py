@@ -45,20 +45,17 @@ from src.shared.coordinates import cell_centres
 
 
 # ─── Sparse mask generation ────────────────────────────────────────────────
-def load_sensor_indices(building_yaml: Path) -> List[Tuple[int, int, int]]:
-    """Sensor 위치를 (60, 40, 6) grid index 로 변환.
+def load_sensor_indices(building_yaml: Path | None = None) -> List[Tuple[int, int, int]]:
+    """Sensor 위치를 (60, 40, 6) grid index 로 변환 — D-024 v3.3 39 sensors.
 
     Z 는 호흡고도 (1.75m → z_idx=3) 로 고정.
     """
-    with building_yaml.open(encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    from src.tier1.detector_positions import ALL_DETECTORS
     x_c, y_c, z_c = cell_centres()
     z_idx = int(np.argmin(np.abs(z_c - 1.75)))
     sensors = []
-    for n in cfg["nodes"]:
-        if not n.get("has_detector"):
-            continue
-        sx, sy, _ = n["pos"]
+    for d in ALL_DETECTORS:
+        sx, sy, _ = d.position
         ix = int(np.argmin(np.abs(x_c - sx)))
         iy = int(np.argmin(np.abs(y_c - sy)))
         sensors.append((ix, iy, z_idx))
