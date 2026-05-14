@@ -381,6 +381,15 @@ python experiments/exp_path_001.py \
    (6 frame history). t₀=120s 이면 t_start = 120/10 - 6 = 6.
    다른 t₀ 일반화는 `t_start = int(t0 // DT_SLCF) - 6`.
 
+   GNN 입력은 binary 신호만이 아니라 **5-D feature** ((N=39, T_in=6, F=5)):
+   * channel 0 `is_detected` — binary {0, 1}, D-023 trigger latched
+   * channel 1 `det_time_norm` — continuous [0, 1], `activation_time / 300s`
+   * channel 2-4 `type_onehot` — static {room, corridor, exit}
+
+   세 종류 모두 기존 화재감지기 인프라에서 얻을 수 있는 정보 (트리거 +
+   타임스탬프 + 설계도) — "추가 센서 hardware 0" framing 유효.
+   `Tier1FireDataset.__getitem__` 이 5-D 구성을 자동 처리한다.
+
 2. **Cold-start 회피** — t₀ < 90s 영역에서는 decoder IoU 가 0.662 까지
    떨어진다 (multi-t₀ 검증, commit `5fe5c03`). H6 evacuation simulator 는
    감지기 trigger 시점부터 시작 (D-023) — t₀ ≥ 90s 보장.
